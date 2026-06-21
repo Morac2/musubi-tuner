@@ -350,7 +350,15 @@ def main() -> None:
     if getattr(args, "ltx_mode", None) in short_map:
         args.ltx_mode = short_map[args.ltx_mode]
 
-    device = torch.device(args.device if args.device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
+    if args.device is not None:
+        device = torch.device(args.device)
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    logger.info("LTX-2 text cache device: %s", device)
 
     blueprint_generator = BlueprintGenerator(ConfigSanitizer())
     logger.info("Load dataset config from %s", args.dataset_config)

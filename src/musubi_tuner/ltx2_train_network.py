@@ -796,6 +796,68 @@ class LTX2NetworkTrainer(LTX2SamplingMixin, NetworkTrainer):
         self._latent_temporal_weighting_config = None
         self._latent_delta_loss_config = None
 
+    def validate_training_device(self, args: argparse.Namespace, accelerator: Accelerator) -> None:
+        """Validate and normalize the supported LTX-2 training features for MPS."""
+        if accelerator.device.type != "mps":
+            return
+
+        if not torch.backends.mps.is_available():
+            raise RuntimeError("Accelerate selected MPS, but torch.backends.mps.is_available() is false")
+
+        unsupported_attention = [
+            name
+            for name in ("flash_attn", "flash3", "xformers", "sage_attn")
+            if bool(getattr(args, name, False))
+        ]
+        if unsupported_attention:
+            raise ValueError(
+                "LTX-2 MPS training supports PyTorch SDPA only; disable: " + ", ".join(unsupported_attention)
+            )
+        args.sdpa = True
+
+        unsupported_flags = {
+            "fp8_base": "FP8 base weights",
+            "fp8_scaled": "FP8 scaled weights",
+            "fp8_w8a8": "FP8 W8A8",
+            "fp8_gemm": "FP8 GEMM",
+            "int8_weights": "int8 full-parameter training",
+            "qgalore_full_ft": "Q-GaLore full-parameter training",
+            "ltx2_model_parallel": "CUDA model parallelism",
+            "ltx2_remote_stage": "remote-stage training",
+            "compile": "torch.compile",
+            "blockwise_checkpointing": "blockwise weight checkpointing",
+            "gradient_checkpointing_cpu_offload": "CPU activation offloading",
+            "use_pinned_memory_for_block_swap": "pinned-memory block swapping",
+        }
+        enabled = [label for flag, label in unsupported_flags.items() if bool(getattr(args, flag, False))]
+        if enabled:
+            raise ValueError("Unsupported LTX-2 MPS options: " + ", ".join(enabled))
+
+        if int(getattr(args, "blocks_to_swap", 0) or 0) > 0:
+            raise ValueError(
+                "--blocks_to_swap is not yet supported on MPS. With a 128 GB unified-memory Mac, "
+                "start with an NF4 resident model and --blocks_to_swap 0."
+            )
+
+        if args.mixed_precision != "no":
+            raise ValueError("LTX-2 MPS training requires --mixed_precision no; model tensors remain explicitly BF16")
+
+        optimizer_type = str(getattr(args, "optimizer_type", "AdamW") or "AdamW").lower()
+        if "bitsandbytes" in optimizer_type or optimizer_type.endswith("8bit") or optimizer_type.startswith("paged"):
+            raise ValueError("Use --optimizer_type AdamW on MPS; CUDA-oriented 8-bit optimizers are unsupported")
+
+        quantize_device = getattr(args, "quantize_device", None)
+        if quantize_device in {None, "gpu"}:
+            args.quantize_device = "mps" if bool(getattr(args, "nf4_base", False)) else quantize_device
+        elif quantize_device == "cuda":
+            raise ValueError("--quantize_device cuda is invalid for MPS; use mps or cpu")
+
+        logger.info(
+            "LTX-2 MPS training enabled: device=%s, attention=SDPA, quantize_device=%s",
+            accelerator.device,
+            getattr(args, "quantize_device", None),
+        )
+
     def is_model_parallel_enabled(self, args) -> bool:
         return is_ltx2_model_parallel_enabled(args) or is_ltx2_remote_stage_enabled(args)
 
@@ -2882,6 +2944,13 @@ class LTX2NetworkTrainer(LTX2SamplingMixin, NetworkTrainer):
 
     def handle_model_specific_args(self, args: argparse.Namespace) -> None:
         """Handle LTX-2-specific command line arguments"""
+        if torch.backends.mps.is_available() and args.mixed_precision != "no":
+            logger.warning(
+                "Accelerate mixed precision is not enabled for MPS; using --mixed_precision no. "
+                "LTX-2 model and training tensors retain their explicit BF16 dtype."
+            )
+            args.mixed_precision = "no"
+
         self.dit_dtype = detect_ltx2_dtype(args.ltx2_checkpoint)
         if self.dit_dtype is not None and self.dit_dtype.itemsize == 1:
             if args.mixed_precision == "fp16":

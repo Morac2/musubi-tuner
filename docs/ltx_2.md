@@ -434,6 +434,46 @@ For LTX-2 checkpoints, replace:
 - `--ltx2_checkpoint /path/to/ltx-2.3.safetensors` -> `--ltx2_checkpoint /path/to/ltx-2.safetensors`
 - `--ltx_version 2.3` -> `--ltx_version 2.0`
 
+#### Apple Silicon (MPS) LoRA Training
+
+LTX-2.3 LoRA training has an initial Apple Silicon path using a resident NF4 base model, BF16 model tensors,
+and PyTorch SDPA. Pre-cache dataset latents and text encoder outputs before training so the VAE and Gemma do
+not need to remain loaded during the training run. Both LTX-2 cache commands automatically select MPS; pass
+`--device mps` explicitly if a saved configuration overrides the device. Do not use Gemma 4-bit/8-bit loading
+or FP8 Gemma safetensors on MPS; use the normal Gemma checkpoint in BF16 for text caching.
+
+```bash
+accelerate launch --num_cpu_threads_per_process 1 --mixed_precision no ltx2_train_network.py \
+  --mixed_precision no \
+  --dataset_config dataset.toml \
+  --ltx2_checkpoint /path/to/ltx-2.3-22b-dev.safetensors \
+  --ltx_version 2.3 \
+  --ltx_version_check_mode error \
+  --ltx2_mode video \
+  --nf4_base \
+  --quantize_device mps \
+  --blocks_to_swap 0 \
+  --sdpa \
+  --gradient_checkpointing \
+  --optimizer_type AdamW \
+  --learning_rate 1e-4 \
+  --network_module networks.lora_ltx2 \
+  --network_dim 16 \
+  --network_alpha 16 \
+  --timestep_sampling shifted_logit_normal \
+  --output_dir output \
+  --output_name ltx23_mps_lora
+```
+
+Accelerate 1.6 does not expose BF16 mixed-precision mode for MPS, so use `--mixed_precision no`. The trainer
+still keeps the LTX-2 model and training tensors in their explicit BF16 dtype.
+
+The initial MPS path does not support FP8, FlashAttention, xFormers, SageAttention, Triton, CUDA-oriented
+8-bit optimizers, model parallelism, block swapping, CPU activation offloading, blockwise weight checkpointing,
+or `torch.compile`. Standard gradient checkpointing is supported. Start with batch size 1, short clips, and a
+small LoRA rank. Validation sampling should remain disabled until the training-only path is verified for the
+chosen dataset and checkpoint.
+
 ### DoRA LoRA Training
 <sub>[↑ contents](#table-of-contents)</sub>
 
@@ -3704,4 +3744,3 @@ For longer runs, start with video-only short-context training until checkpoint s
 **Cloud Platforms**
 - [fal.ai LTX-2 Trainer](https://fal.ai/models/fal-ai/ltx2-video-trainer) — Cloud-based LTX-2 LoRA training via API (~$0.005/step)
 - [WaveSpeedAI LTX-2](https://wavespeed.ai/landing/ltx2) — Hosted LTX-2 inference (T2V, I2V, video extend, lipsync)
-

@@ -2833,6 +2833,9 @@ class NetworkTrainer:
         if args.mixed_precision is None:
             args.mixed_precision = accelerator.mixed_precision
             logger.info(f"mixed precision set to {args.mixed_precision} / mixed precisionを{args.mixed_precision}に設定")
+        validate_training_device = getattr(self, "validate_training_device", None)
+        if callable(validate_training_device):
+            validate_training_device(args, accelerator)
         is_main_process = accelerator.is_main_process
         model_parallel = self.is_model_parallel_enabled(args)
         if model_parallel:

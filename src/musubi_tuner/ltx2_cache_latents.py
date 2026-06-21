@@ -35,7 +35,6 @@ from musubi_tuner.dataset.image_video_dataset import (
     resize_image_to_bucket,
     save_latent_cache_ltx2,
 )
-from musubi_tuner.ltx_2.model.audio_vae.audio_vae import LATENT_DOWNSAMPLE_FACTOR
 from musubi_tuner.ltx_2.env import get_ltx2_env
 from musubi_tuner.model_defaults import default_ltx2_checkpoint_path
 from musubi_tuner.utils.model_utils import str_to_dtype
@@ -50,6 +49,13 @@ LTX2_VIDEO_SPATIAL_DOWNSAMPLE_FACTOR = 32
 LTX2_AUDIO_ONLY_PROXY_LATENT_FRAMES = 1
 LTX2_AUDIO_ONLY_PROXY_LATENT_HEIGHT = 1
 LTX2_AUDIO_ONLY_PROXY_LATENT_WIDTH = 1
+
+
+def _audio_latent_downsample_factor() -> int:
+    """Load audio-only dependencies only when an audio cache path needs them."""
+    from musubi_tuner.ltx_2.model.audio_vae.audio_vae import LATENT_DOWNSAMPLE_FACTOR
+
+    return LATENT_DOWNSAMPLE_FACTOR
 
 
 def _amp_context(device: torch.device, dtype: torch.dtype):
@@ -330,7 +336,7 @@ def _expected_audio_latent_length_for_item(
         return None
     sample_rate = int(getattr(encoder, "sample_rate", 16000))
     hop_length = int(getattr(encoder, "mel_hop_length", 160))
-    latents_per_second = float(sample_rate) / float(hop_length) / float(LATENT_DOWNSAMPLE_FACTOR)
+    latents_per_second = float(sample_rate) / float(hop_length) / float(_audio_latent_downsample_factor())
     duration_s = float(frame_count) / max(float(fps), 1.0)
     return max(int(duration_s * latents_per_second), 1)
 
@@ -531,7 +537,9 @@ def encode_and_save_audio_cache(
             latents_per_second = float(original_steps) / waveform_seconds
         else:
             latents_per_second = (
-                float(sample_rate) / float(getattr(encoder, "mel_hop_length", 160)) / float(LATENT_DOWNSAMPLE_FACTOR)
+                float(sample_rate)
+                / float(getattr(encoder, "mel_hop_length", 160))
+                / float(_audio_latent_downsample_factor())
             )
         for start_s, end_s in loss_mask_intervals:
             start_idx = max(0, min(time_steps, int(math.floor(float(start_s) * latents_per_second))))
@@ -1406,7 +1414,15 @@ def main() -> None:
         logger.info("Disabling cuDNN PyTorch backend.")
         torch.backends.cudnn.enabled = False
 
-    device = torch.device(args.device) if args.device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.device:
+        device = torch.device(args.device)
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    logger.info("LTX-2 latent cache device: %s", device)
 
     # Handle I2V sample latent precaching if requested.
     # This is additive: continue with normal dataset latent caching afterward.

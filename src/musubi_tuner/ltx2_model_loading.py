@@ -435,8 +435,13 @@ def load_ltx2_model(
     target_device = torch.device(device)
     load_device = torch.device(load_device)
 
-    # Resolve quantization device: CLI flag > env var > default (cuda)
-    _qdev_raw = quantize_device or os.getenv("LTX2_NF4_CALC_DEVICE") or os.getenv("LTX2_FP8_CALC_DEVICE") or "cuda"
+    # Resolve quantization device: CLI flag > env var > target accelerator.
+    _qdev_raw = (
+        quantize_device
+        or os.getenv("LTX2_NF4_CALC_DEVICE")
+        or os.getenv("LTX2_FP8_CALC_DEVICE")
+        or target_device.type
+    )
     _qdev = _qdev_raw.strip().lower()
     if _qdev in {"1", "true", "yes", "cuda", "gpu"}:
         if target_device.type == "cuda":
@@ -444,6 +449,16 @@ def load_ltx2_model(
         else:
             logger.warning(
                 "Quantize device '%s' requested GPU, but target device is %s; falling back to CPU.", _qdev_raw, target_device
+            )
+            _resolved_quant_device = torch.device("cpu")
+    elif _qdev in {"mps", "metal"}:
+        if target_device.type == "mps" and torch.backends.mps.is_available():
+            _resolved_quant_device = target_device
+        else:
+            logger.warning(
+                "Quantize device '%s' requested MPS, but target device is %s; falling back to CPU.",
+                _qdev_raw,
+                target_device,
             )
             _resolved_quant_device = torch.device("cpu")
     else:

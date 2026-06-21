@@ -922,8 +922,11 @@ def ltx2_setup_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         "--quantize_device",
         type=str,
         default=None,
-        choices=["cpu", "cuda", "gpu"],
-        help="Device for NF4/FP8 quantization math (default: cuda). Overrides LTX2_NF4_CALC_DEVICE / LTX2_FP8_CALC_DEVICE env vars.",
+        choices=["cpu", "cuda", "gpu", "mps"],
+        help=(
+            "Device for NF4/FP8 quantization math (default: accelerator device). "
+            "Overrides LTX2_NF4_CALC_DEVICE / LTX2_FP8_CALC_DEVICE env vars."
+        ),
     )
     parser.add_argument(
         "--loftq_init",

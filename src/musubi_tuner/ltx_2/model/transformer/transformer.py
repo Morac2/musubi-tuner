@@ -403,12 +403,21 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 v_vals = list(inputs[:vid_len])
                 a_vals = list(inputs[vid_len:])
 
-                # Determine target device from inputs
-                target_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+                # Determine the compute device from inputs or resident block weights.
+                # Inputs can be on CPU when activation offloading is enabled.
+                target_device = torch.device("cpu")
                 for inp in inputs:
-                    if isinstance(inp, torch.Tensor) and inp.device.type == "cuda":
+                    if isinstance(inp, torch.Tensor) and inp.device.type != "cpu":
                         target_device = inp.device
                         break
+                if target_device.type == "cpu":
+                    first_param = next(self.parameters(), None)
+                    if first_param is not None and first_param.device.type != "cpu":
+                        target_device = first_param.device
+                    elif torch.cuda.is_available():
+                        target_device = torch.device("cuda")
+                    elif torch.backends.mps.is_available():
+                        target_device = torch.device("mps")
 
                 # For swapped blocks, handle loading during backward recomputation
                 # Key insight: During FORWARD, offloader loads block to GPU before checkpoint_wrapper runs
